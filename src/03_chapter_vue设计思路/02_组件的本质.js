@@ -43,9 +43,9 @@ function mountElement(vNode, container) {
     const el = document.createElement(vNode.tag);
 
     // 处理属性、事件
-    for (const key in el.props) {
+    for (const key in vNode.props) {
         if (/^on/.test(key)){
-            el.addEventListener(key.substring(2).toLowerCase(), el.props[key])
+            el.addEventListener(key.substring(2).toLowerCase(), vNode.props[key])
         }
     }
     
@@ -63,7 +63,7 @@ function mountElement(vNode, container) {
 // 渲染组件
 function mountComponent(vNode, container){
     // 调用组件函数，获取虚拟DOM
-    const subtree = vNode.props();
+    const subtree = vNode.tag();
     // 递归调用 renderer 渲染 subtree
     renderer(subtree, container)
 }

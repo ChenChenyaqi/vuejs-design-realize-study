@@ -1,7 +1,7 @@
 // 上节代码同样存在缺陷，同一个副作用函数，可能同时挂在 key1、key2...下
 // 比如这种情况
 const _data = { ok: true, text: 'hello world' }
-const _dataProxy = new Proxy(data, { /* ... */ })
+const _dataProxy = new Proxy(_data, { /* ... */ })
 
 let _activeEffect;
 function _effect(fn) {
@@ -48,7 +48,7 @@ function cleanup(effectFn) {
         deps.delete(effectFn)
     }
     // 重置 effectFn.deps 数组
-    effectFn.deps.length = 0
+    effectFn.deps = []
 }
 
 // 在track函数中对effectFn.deps进行收集
