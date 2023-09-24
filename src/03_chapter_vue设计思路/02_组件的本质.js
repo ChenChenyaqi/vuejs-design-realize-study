@@ -46,6 +46,8 @@ function mountElement(vNode, container) {
     for (const key in vNode.props) {
         if (/^on/.test(key)){
             el.addEventListener(key.substring(2).toLowerCase(), vNode.props[key])
+        } else {
+            el.setAttribute(key, vNode.props[key])
         }
     }
     
