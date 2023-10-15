@@ -1,7 +1,17 @@
-// import { unmount, normalizeClass, shouldSetAsProps } from "./utils"
+import { unmount, normalizeClass, shouldSetAsProps } from "./utils"
+
+// 文本节点的type标识
+const Text = Symbol()
 
 function createRenderer(config) {
-  const { createElement, insert, setElementText, patchProps } = config
+  const {
+    createElement,
+    insert,
+    setElementText,
+    patchProps,
+    setText,
+    createText,
+  } = config
 
   /**
    * 将虚拟dom vnode渲染到container容器上去
@@ -42,6 +52,17 @@ function createRenderer(config) {
       } else {
         // 更新普通dom元素操作
         patchElement(oldNode, newNode)
+      }
+    } else if (type === Text) {
+      // 处理文本节点
+      if (!oldNode) {
+        const el = (newNode.el = createText(newNode.children))
+        insert(el, container)
+      } else {
+        const el = (newNode.el = oldNode.el)
+        if (newNode.children !== oldNode.children) {
+          setText(el, newNode.children)
+        }
       }
     } else if (typeof type === "object") {
       // vnode是组件
@@ -122,9 +143,7 @@ function createRenderer(config) {
       // 新vnode的children也是一组子节点
       if (Array.isArray(oldNode.children)) {
         // diff
-        // 将旧的一组子节点全部卸载
-        oldNode.children.forEach((c) => unmount(c))
-        newNode.children.forEach((c) => patch(null, c, container))
+        patchKeyedChildren(oldNode, newNode, container)
       } else {
         setElementText(container, "")
         newNode.children.forEach((c) => patch(null, c, container))
@@ -134,6 +153,83 @@ function createRenderer(config) {
         oldNode.children.forEach((c) => unmount(c))
       } else if (typeof oldNode.children === "string") {
         setElementText(container, "")
+      }
+    }
+  }
+
+  /**
+   * 双端diff算法处理children
+   * @param {object} oldNode
+   * @param {object} newNode
+   * @param {HTMLElement} container
+   */
+  function patchKeyedChildren(oldNode, newNode, container) {
+    const oldChildren = oldNode.children
+    const newChildren = newNode.children
+    // 四个索引值
+    let oldStartIndex = 0
+    let oldEndIndex = oldChildren.length - 1
+    let newStartIndex = 0
+    let newEndIndex = newChildren.length - 1
+    // 四个索引指向的vnode节点
+    let oldStartVNode = oldChildren[oldStartIndex]
+    let oldEndVNode = oldChildren[oldEndIndex]
+    let newStartVNode = newChildren[newStartIndex]
+    let newEndVNode = newChildren[newEndIndex]
+
+    while (oldStartIndex <= oldEndIndex && newStartIndex <= newEndIndex) {
+      if (!oldStartVNode) {
+        oldStartVNode = oldChildren[++oldStartIndex]
+      } else if (!oldEndVNode) {
+        oldEndVNode = oldChildren[--oldEndIndex]
+      } else if (oldStartVNode.key === newStartVNode.key) {
+        patch(oldStartVNode, newStartVNode, container)
+        oldStartVNode = oldChildren[++oldStartIndex]
+        newStartVNode = newChildren[++newStartIndex]
+      } else if (oldEndVNode.key === newEndVNode.key) {
+        patch(oldEndVNode, newEndVNode, container)
+        oldEndVNode = oldChildren[--oldEndIndex]
+        newEndVNode = newChildren[--newEndIndex]
+      } else if (oldStartVNode.key === newEndVNode.key) {
+        patch(oldStartVNode, newEndVNode, container)
+        insert(oldStartVNode.el, container, oldEndVNode.el.nextSibling)
+        oldStartVNode = oldChildren[++oldStartIndex]
+        newEndVNode = newChildren[--newEndIndex]
+      } else if (oldEndVNode.key === newStartVNode.key) {
+        patch(oldEndVNode, newStartVNode, container)
+        insert(oldEndVNode.el, container, oldStartVNode.el)
+        oldEndVNode = oldChildren[--oldEndIndex]
+        newStartVNode = newChildren[++newStartIndex]
+      } else {
+        // 处理非理性的情况
+        const indexInOld = oldChildren.findIndex(
+          (node) => node.key === newStartVNode.key
+        )
+
+        if (indexInOld > 0) {
+          // 能在oldChildren中找到newStarVNode，说明可以复用，移动旧节点
+          const vnodeToMove = oldChildren[indexInOld]
+          patch(vnodeToMove, newStartVNode, container)
+          insert(vnodeToMove.el, container, oldStartVNode.el)
+          oldChildren[indexInOld] = undefined
+        } else {
+          // 找不到，说明是新的节点，进行挂载
+          patch(null, newStartVNode, container, oldStartVNode.el)
+        }
+        newStartVNode = newChildren[++newStartIndex]
+      }
+    }
+
+    // 检查是否还有遗留的节点
+    if (oldEndIndex < oldStartIndex && newStartIndex <= newEndIndex) {
+      // 有新增的节点要处理
+      for (let i = newStartIndex; i <= newEndIndex; i++) {
+        patch(null, newChildren[i], container, oldStartVNode.el)
+      }
+    } else if (newEndIndex < newStartIndex && oldStartIndex <= oldEndIndex) {
+      // 有卸载的节点要处理
+      for (let i = oldStartIndex; i <= oldEndIndex; i++) {
+        unmount(oldChildren[i])
       }
     }
   }
@@ -150,6 +246,14 @@ const render = createRenderer({
   },
   insert(el, parent, anchor = null) {
     parent.insertBefore(el, anchor)
+  },
+  /** 创建一个文本节点 */
+  createText(text) {
+    return document.createTextNode(text)
+  },
+  /** 设置文本节点的值 */
+  setText(el, text) {
+    el.nodeValue = text
   },
   /**
    *
@@ -204,86 +308,5 @@ const render = createRenderer({
   },
 })
 
-const vnode = {
-  type: "div",
-  props: {
-    id: "foo",
-  },
-  children: [
-    {
-      type: "p",
-      children: "hello",
-    },
-    {
-      type: "button",
-      props: {
-        disabled: false, // false / ''
-        onClick: () => {
-          console.log("click")
-          render(newNode, document.getElementById("app"))
-        },
-      },
-      children: "click me!",
-    },
-  ],
-}
-
-const newNode = {
-  type: "div",
-  props: {
-    id: "foo",
-  },
-  children: [
-    {
-      type: "div",
-      children: "hello hello",
-    },
-    {
-      type: "button",
-      props: {
-        disabled: false, // false / ''
-        onClick: () => {
-          console.log("click Me")
-        },
-      },
-      children: "click me!",
-    },
-  ],
-}
-
-render(vnode, document.getElementById("app"))
-
-// 特殊的props只能通过setAttribute设置
-function shouldSetAsProps(el, key, value) {
-  if (key === "form" && el.tagName === "INPUT") return false
-  return key in el
-}
-
-// 卸载
-function unmount(vnode) {
-  const parent = vnode.el.parentNode
-  if (parent) {
-    parent.removeChild(vnode.el)
-  }
-}
-
-// 转换className
-function normalizeClass(className) {
-  if (typeof className === "string") {
-    return className
-  } else if (Array.isArray(className)) {
-    const classList = []
-    className.forEach((cl) => {
-      classList.push(cl)
-    })
-    return classList.join(" ")
-  } else {
-    const classList = []
-    for (const key in className) {
-      if (className[key]) {
-        classList.push(key)
-      }
-    }
-    return classList.join(" ")
-  }
-}
+export default createRenderer
+export { render }
