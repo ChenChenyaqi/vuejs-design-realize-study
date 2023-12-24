@@ -1,4 +1,12 @@
-import { unmount, normalizeClass, shouldSetAsProps } from "./utils"
+import { effect, reactive, shallowReactive, shallowReadonly } from "vue"
+import {
+  unmount,
+  normalizeClass,
+  shouldSetAsProps,
+  resolveProps,
+  hasPropsChanged,
+} from "./utils"
+import { queueJob } from "./queueJob"
 
 // 文本节点的type标识
 const Text = Symbol()
@@ -38,7 +46,7 @@ function createRenderer(config) {
    * @param {object} newNode
    * @param {HTMLElement} container
    */
-  function patch(oldNode, newNode, container) {
+  function patch(oldNode, newNode, container, anchor) {
     // 如果新旧vnode类型不同，则当做卸载旧vnode
     if (oldNode && oldNode.type !== newNode.type) {
       unmount(oldNode)
@@ -66,6 +74,13 @@ function createRenderer(config) {
       }
     } else if (typeof type === "object") {
       // vnode是组件
+      if (!oldNode) {
+        // 挂载组件
+        mountComponent(newNode, container, anchor)
+      } else {
+        // 更新组件
+        patchComponent(oldNode, newNode, anchor)
+      }
     } else if (typeof type === "xxx") {
       // 处理其它类型的vnode
     }
@@ -230,6 +245,137 @@ function createRenderer(config) {
       // 有卸载的节点要处理
       for (let i = oldStartIndex; i <= oldEndIndex; i++) {
         unmount(oldChildren[i])
+      }
+    }
+  }
+
+  /**
+   * 挂载组件
+   * @param {object} vnode
+   * @param {HTMLElement} container
+   * @param {HTMLElement} anchor
+   */
+  function mountComponent(vnode, container, anchor) {
+    // 通过vnode获取组件的选项对象，即vnode.type
+    const componentOptions = vnode.type
+    // 获取组件的渲染函数 render
+    const {
+      render,
+      data,
+      setup,
+      props: propsOption,
+      beforeCreate,
+      created,
+      beforeMount,
+      mount,
+      beforeUpdate,
+      updated,
+    } = componentOptions
+
+    beforeCreate && beforeCreate()
+
+    // 获取组件的data
+    const state = data ? reactive(data()) : null
+    // 解析最终的props和attrs数据
+    const [props, attrs] = resolveProps(propsOption, vnode.props)
+
+    // 定义组件实例
+    const instance = {
+      state,
+      props: shallowReactive(props),
+      isMounted: false,
+      subTree: null,
+    }
+
+    // setupContext
+    const setupContext = { attrs }
+    const setupResult = setup(shallowReadonly(instance.props), setupContext)
+    let setupState = null
+    if (typeof setupResult === "function") {
+      if (render) console.error("setup 函数返回渲染函数，render 选项将被忽略")
+      render = setupResult
+    } else {
+      setupState = setupResult
+    }
+
+    vnode.component = instance
+
+    // 创建渲染上下文对象，本质上是组件实例的代理
+    const renderContext = new Proxy(instance, {
+      get(t, k, r) {
+        const { state, props } = t
+        if (state && k in state) {
+          return state[k]
+        } else if (k in props) {
+          return props[k]
+        } else if (setupState && k in setupState) {
+          return setupState[k]
+        } else {
+          console.error("不存在")
+        }
+      },
+      set(t, k, v, r) {
+        const { state, props } = t
+        if (state && k in state) {
+          state[k] = v
+        } else if (k in props) {
+          console.log(`Attempting to mutate prop "${k}". Props
+          are readonly.`)
+        } else if (setupState && k in setupState) {
+          setupState[k] = v
+        } else {
+          console.error("不存在")
+        }
+      },
+    })
+
+    created && created.call(renderContext)
+
+    // 将组件的render函数调用包装在effect中
+    effect(
+      () => {
+        // 执行渲染函数返回虚拟dom, 将render函数的this设置为state
+        const subTree = render.call(state, state)
+        if (!instance.isMounted) {
+          beforeMount && beforeMount.call(state)
+          // 调用patch，挂载组件内容
+          patch(null, subTree, container, anchor)
+          instance.isMounted = true
+          mount && mount.call(state)
+        } else {
+          // 更新组件
+          beforeUpdate && beforeUpdate.call(state)
+          patch(instance.subTree, subTree, container, anchor)
+          updated && updated.call(state)
+        }
+        // 更新组件实例的子树
+        instance.subTree = subTree
+      },
+      { scheduler: queueJob }
+    )
+  }
+
+  /**
+   * 更新组件
+   * @param {object} oldNode
+   * @param {object} newNode
+   * @param {HTMLElement} anchor
+   */
+  function patchComponent(oldNode, newNode, anchor) {
+    // 获取组件实例
+    const instance = (newNode.component = oldNode.component)
+    // 获取当前的props数据
+    const { props } = instance
+
+    if (hasPropsChanged(oldNode.props, newNode.props)) {
+      const { nextProps } = resolveProps(newNode.type.props, newNode.props)
+      // 更新props
+      for (const k in nextProps) {
+        props[k] = nextProps[k]
+      }
+      // 删除不存在的props
+      for (const k in props) {
+        if (!(k in nextProps)) delete props[k]
       }
     }
   }
